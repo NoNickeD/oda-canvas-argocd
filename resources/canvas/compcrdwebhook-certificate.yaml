@@ -1,0 +1,20 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: compcrdwebhook-cert
+  namespace: canvas
+spec:
+  secretName: compcrdwebhook-secret
+  issuerRef:
+    name: selfsigned-cluster-issuer
+    kind: ClusterIssuer
+  commonName: compcrdwebhook.canvas.svc
+  dnsNames:
+    - compcrdwebhook
+    - compcrdwebhook.canvas
+    - compcrdwebhook.canvas.svc
+    - compcrdwebhook.canvas.svc.cluster.local
+  privateKey:
+    rotationPolicy: Always
+
+
