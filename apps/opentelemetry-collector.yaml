@@ -1,0 +1,162 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: opentelemetry-collector
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: oda-canvas
+  source:
+    repoURL: https://open-telemetry.github.io/opentelemetry-helm-charts
+    chart: opentelemetry-collector
+    targetRevision: 0.130.1
+    helm:
+      values: |
+        mode: deployment
+        replicaCount: 1
+        image:
+          repository: otel/opentelemetry-collector-contrib
+        presets:
+          kubernetesAttributes:
+            enabled: true
+          kubernetesEvents:
+            enabled: true
+          clusterMetrics:
+            enabled: true
+        service:
+          type: ClusterIP
+        ports:
+          otlp:
+            enabled: true
+            containerPort: 4317
+            servicePort: 4317
+            protocol: TCP
+          otlp-http:
+            enabled: true
+            containerPort: 4318
+            servicePort: 4318
+            protocol: TCP
+          metrics:
+            enabled: true
+            containerPort: 8888
+            servicePort: 8888
+            protocol: TCP
+          prometheus:
+            enabled: true
+            containerPort: 9090
+            servicePort: 9090
+            protocol: TCP
+        config:
+          receivers:
+            otlp:
+              protocols:
+                grpc:
+                  endpoint: 0.0.0.0:4317
+                http:
+                  endpoint: 0.0.0.0:4318
+            prometheus:
+              config:
+                scrape_configs:
+                  - job_name: 'otel-collector'
+                    scrape_interval: 10s
+                    static_configs:
+                      - targets: ['localhost:8888']
+          processors:
+            batch:
+              timeout: 10s
+              send_batch_size: 1024
+            memory_limiter:
+              check_interval: 1s
+              limit_mib: 512
+              spike_limit_mib: 128
+            k8sattributes:
+              extract:
+                metadata:
+                  - k8s.namespace.name
+                  - k8s.deployment.name
+                  - k8s.statefulset.name
+                  - k8s.daemonset.name
+                  - k8s.cronjob.name
+                  - k8s.job.name
+                  - k8s.node.name
+                  - k8s.pod.name
+                  - k8s.pod.uid
+                  - k8s.pod.start_time
+            resource:
+              attributes:
+                - key: service.name
+                  from_attribute: k8s.deployment.name
+                  action: insert
+                - key: service.namespace
+                  from_attribute: k8s.namespace.name
+                  action: insert
+          exporters:
+            prometheus:
+              endpoint: "0.0.0.0:9090"
+              send_timestamps: true
+              metric_expiration: 180m
+              resource_to_telemetry_conversion:
+                enabled: true
+            prometheusremotewrite:
+              endpoint: "http://prometheus-server.monitoring.svc.cluster.local/api/v1/write"
+              tls:
+                insecure: true
+            debug:
+              verbosity: detailed
+              sampling_initial: 5
+              sampling_thereafter: 200
+            otlp:
+              endpoint: "localhost:4317"
+              tls:
+                insecure: true
+          service:
+            telemetry:
+              logs:
+                level: info
+              metrics:
+                level: detailed
+                address: 0.0.0.0:8888
+            pipelines:
+              traces:
+                receivers: [otlp]
+                processors: [memory_limiter, batch, k8sattributes, resource]
+                exporters: [debug]
+              metrics:
+                receivers: [otlp, prometheus]
+                processors: [memory_limiter, batch, k8sattributes, resource]
+                exporters: [prometheus, prometheusremotewrite]
+              logs:
+                receivers: [otlp]
+                processors: [memory_limiter, batch, k8sattributes, resource]
+                exporters: [debug]
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+          requests:
+            cpu: 200m
+            memory: 256Mi
+        autoscaling:
+          enabled: false
+          minReplicas: 1
+          maxReplicas: 10
+          targetCPUUtilizationPercentage: 80
+          targetMemoryUtilizationPercentage: 80
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        maxDuration: 3m0s
+        factor: 2
