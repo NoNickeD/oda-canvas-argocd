@@ -1,0 +1,5 @@
+scripts/
+
+.vscode/
+.DS_Store
+.idea/
